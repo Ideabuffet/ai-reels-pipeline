@@ -7,6 +7,7 @@
 #   Network Volume mounted at /runpod-volume -> /runpod-volume/models (downloaded once, kept)
 #   otherwise                                -> /workspace/models (pod disk, downloaded on every pod)
 mkdir -p /tmp/pipeline
+[ -f /tmp/pipeline/boot.start ] || date +%s > /tmp/pipeline/boot.start
 if [ -z "${MODELS_ROOT:-}" ]; then
   if [ -d /runpod-volume ]; then MODELS_ROOT=/runpod-volume/models; else MODELS_ROOT=/workspace/models; fi
 fi

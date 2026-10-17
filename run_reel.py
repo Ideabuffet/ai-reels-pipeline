@@ -10,7 +10,7 @@ Steps: [TTS] -> create pod -> boot -> models (aria2 / Network Volume) -> upload 
 -> free memory -> InfiniteTalk parts (batch) -> download -> terminate pod (always, also on errors / Ctrl-C)
 -> montage. Clips are upscaled with RTX VSR inside each graph. Prints time and cost per step.
 """
-import argparse, contextlib, datetime as dt, json, os, signal, sys, time
+import argparse, contextlib, datetime as dt, json, os, shutil, signal, subprocess, sys, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -113,7 +113,7 @@ def pod_body(a, gpu, cloud, name):
         "name": name, "imageName": a.image, "gpuTypeIds": [gpu], "gpuCount": 1, "cloudType": cloud,
         "containerDiskInGb": 20, "volumeInGb": a.volume_gb, "volumeMountPath": "/workspace",
         "ports": ["8188/http", "22/tcp"], "minRAMPerGPU": a.min_ram, "minVCPUPerGPU": 4,
-        "allowedCudaVersions": ["12.8", "12.9", "13.0", "13.1", "13.2"],
+        "allowedCudaVersions": ["12.8", "12.9", "13.0"],
         "env": {"PIPELINE_HEARTBEAT_MIN": str(a.heartbeat_min), "PIPELINE_MAX_MIN": str(a.max_min)},
     }
     if a.bootstrap:  # stock image, docker/bootstrap.sh from the repo does the Dockerfile steps at boot
@@ -138,7 +138,7 @@ def create_pod(a, cands, name):
             log(f"pod {pod['id']}: {q['name']} {q['cloud']} ${pod.get('costPerHr') or q['price']}/ч")
             return pod, q
         except rp.RunPodError as e:
-            errors.append(f"{q['name']} {q['cloud']}: {str(e)[:160]}")
+            errors.append(f"{q['name']} {q['cloud']}: {str(e)[-300:]}")
             log(f"нет машины: {errors[-1]}")
     raise RuntimeError("не удалось создать под ни на одной карте:\n  " + "\n  ".join(errors))
 
@@ -175,10 +175,13 @@ def check_nodes(comfy):
 
 
 def wait_models(comfy, timeout=120 * 60):
-    t0, last, last_b = time.time(), 0, None
+    t0, last, last_b, silent = time.time(), 0, None, time.time()
     while time.time() - t0 < timeout:
         st = comfy.status()
+        if not st and time.time() - silent > 120:
+            log(f"  под не отвечает {int(time.time() - silent) // 60} мин (прокси / сон Мака?)")
         if st:
+            silent = time.time()
             if st["ready"]:
                 return st
             if st["fetch_state"].startswith("failed"):
@@ -296,6 +299,9 @@ def main():
                   f"сам останавливается через {a.heartbeat_min} мин без связи и через {a.max_min} мин в любом случае.")
         if not a.yes and not confirm(text):
             sys.exit("отменено")
+
+        if shutil.which("caffeinate"):  # macOS: no idle sleep while the pod runs (it costs money and trips the watchdog)
+            subprocess.Popen(["caffeinate", "-ims", "-w", str(os.getpid())])
 
         def on_signal(signum, _frame):
             raise KeyboardInterrupt(f"signal {signum}")

@@ -39,15 +39,18 @@ async def pipeline_status(request):
         size = int(size)
         total += size
         f = os.path.join(root, rel)
-        have = os.path.getsize(f) if os.path.exists(f) else 0
+        st = os.stat(f) if os.path.exists(f) else None
+        have = st.st_size if st else 0
         partial = os.path.exists(f + ".aria2")
-        # aria2 writes in place, so a partial file is counted by its size only while the control file exists
-        done += min(have, size)
+        # aria2 with several connections extends the file to full size at once (sparse), so while the
+        # control file exists count the blocks actually written, not the apparent size
+        done += min(st.st_blocks * 512 if partial else have, size) if st else 0
         if have != size or partial:
             missing.append(os.path.basename(rel))
-    uptime = float(open("/proc/uptime").read().split()[0])
+    boot = _read("boot.start")
+    uptime = time.time() - float(boot) if boot else None  # /proc/uptime is the host's, not the pod's
     return web.json_response({
         "models_root": root, "fetch_state": _read("fetch.state", "not started"),
         "bytes_total": total, "bytes_done": done, "missing": missing, "ready": not missing,
-        "uptime_s": round(uptime), "time": time.time(),
+        "uptime_s": round(uptime) if uptime else None, "time": time.time(),
     })
