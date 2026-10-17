@@ -1,6 +1,10 @@
 # Конвейер «сценарий → вертикальный ролик» на своём GPU в RunPod
 
-Вариант C из теста 17.10.2026: клипы действий — **Wan 2.2 I2V A14B**, говорящие куски — **InfiniteTalk**, апскейл до 720×1280 — **RTX VSR**, монтаж — ffmpeg на Маке. Всё по одному JSON-описанию ролика.
+Вариант C из теста 17.10.2026. Всё делается по одному JSON-описанию ролика:
+- клипы действий — **Wan 2.2 I2V A14B**: 121 кадр → **RIFE ×2** → 48 к/с, движение в реальной скорости, без замедления;
+- говорящие куски — **InfiniteTalk**;
+- апскейл до 720×1280 — **RTX VSR**;
+- монтаж — ffmpeg на Маке.
 
 ```bash
 python3 run_reel.py reels/nina_shchi.json
@@ -18,6 +22,8 @@ python3 run_reel.py reels/nina_shchi.json
 Нужно: `RUNPOD_API_KEY` в окружении, `ffmpeg`, `whisper-cli` с моделью `~/development/whisper-models/ggml-small.bin`, Python 3 с `requests` и `Pillow`. Для озвучки — `ELEVENLABS_API_KEY`.
 
 ## Замер: ролик Нины от пустого пода до mp4 (17.10.2026)
+
+Этот прогон сделан ещё без RIFE: 81 кадр, 16 к/с. Граф с RIFE взят из ролика «Горох»: там 5 клипов заняли ~17 мин на A40 (`nina-gorokh/STORYBOARD.md`). В этом оркестраторе он на GPU ещё не прогонялся.
 
 Одна команда `run_reel.py reels/nina_shchi.json`.
 - Под: A40 Secure, $0,59/ч + диск. Community 3090/4090 в тот момент были распроданы.
@@ -62,7 +68,7 @@ python3 run_reel.py reels/nina_shchi.json
 | Файл | Что делает |
 |---|---|
 | `Dockerfile` | `FROM runpod/comfyui:1.3.3-comfyuiv0.30.0-cuda12.8`, ставит aria2 и запускает `setup_nodes.sh` |
-| `setup_nodes.sh` | ставит зафиксированные ноды: WanVideoWrapper `088128b22424` и VideoHelperSuite `4d907bee61e9`; KJNodes берётся из базового образа. Ставит их зависимости, `sageattention==1.0.6`, `nvidia-vfx`, `huggingface_hub>=1.5,<2.0`. Torch закреплён констрейнтом, чтобы зависимости нод его не подменили |
+| `setup_nodes.sh` | ставит зафиксированные ноды: WanVideoWrapper `088128b22424`, VideoHelperSuite `4d907bee61e9` и Frame-Interpolation `26545cc2dd95` с вшитым `rife49.pth` (проверка по sha256); KJNodes берётся из базового образа. Ставит их зависимости, `sageattention==1.0.6`, `nvidia-vfx`, `huggingface_hub>=1.5,<2.0`. Torch закреплён констрейнтом, чтобы зависимости нод его не подменили |
 | `patch_wav2vec.py` | фикс wav2vec для transformers 5 (идемпотентный, падает, если код ноды изменился) |
 | `boot.sh` | entrypoint: выбирает, где лежат модели, запускает скачивание и watchdog, потом стоковый `/start.sh` |
 | `fetch_models.sh` + `models.txt` | aria2 по списку из 11 файлов (62,0 ГБ) с проверкой размеров; уже скачанные файлы пропускает |
@@ -106,7 +112,8 @@ python3 run_reel.py reels/nina_shchi.json
 {
   "name": "nina_shchi",
   "assets": "../../nina-hybrid/assets/nina2",      // относительно файла описания
-  "gen": {"width": 480, "height": 832, "action_frames": 81, "upscale": [720, 1280], "action_seed": 42, "talk_seed": 2},
+  "gen": {"width": 480, "height": 832, "action_frames": 121, "action_interp": 2, "action_fps": 48,
+          "upscale": [720, 1280], "action_seed": 42, "talk_seed": 2},
   "voice": {"voice_id": "KxsqSfqn4XzqvkFEn8eh", "model": "eleven_multilingual_v2", "pad_s": 0.6},  // Mabel
   "script_file": "audio/texts.json",               // или "script": {"1_hook": "текст", ...} — по порядку речи
   "audio": {"1_hook": "audio/pad_1_hook.mp3", ...}, // готовое аудио; с --tts генерируется из script
@@ -133,6 +140,6 @@ python3 run_reel.py reels/nina_shchi.json
 - `run_reel.py` — точка входа, шаги, таблица времени и цены, `report.json` в папке прогона.
 - `runpod_api.py` — REST v1 (поды, тома) и GraphQL (цены, наличие, баланс).
 - `comfy_remote.py` — ComfyUI через прокси: загрузка входов, очередь, ожидание, скачивание.
-- `graphs.py` — графы Wan 2.2 и InfiniteTalk из `comfy_job.py`, плюс RTX VSR. На 24-ГБ картах InfiniteTalk автоматически включает block swap 20.
+- `graphs.py` — графы из `nina-gorokh/tools/comfy_job.py`: Wan 2.2 → RIFE ×2 → RTX VSR и InfiniteTalk → RTX VSR. Старый режим без RIFE включается в описании ролика: `action_frames: 81, action_interp: 1, action_fps: 16`. На 24-ГБ картах InfiniteTalk автоматически включает block swap 20.
 - `tts.py` — ElevenLabs.
 - `montage.py` — монтаж по `layout`, можно запускать отдельно: `montage.py reel.json clips_dir out.mp4`.
