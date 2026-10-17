@@ -17,6 +17,8 @@ sys.path.insert(0, HERE)
 import comfy_remote, graphs, montage, reel_spec, runpod_api as rp, tts  # noqa: E402
 
 DEFAULT_IMAGE = os.environ.get("REEL_IMAGE", "ghcr.io/ideabuffet/ai-reels-comfy:latest")
+BASE_IMAGE = "runpod/comfyui:1.3.3-comfyuiv0.30.0-cuda12.8"
+REPO = "Ideabuffet/ai-reels-pipeline"
 # Cheapest first. Speed on these jobs: A40 ≈ 3090 (17.9 vs 18.4 s/step), 4090 ~1.6-2x faster.
 DEFAULT_GPUS = ["NVIDIA GeForce RTX 3090:COMMUNITY", "NVIDIA GeForce RTX 4090:COMMUNITY",
                 "NVIDIA RTX A6000:COMMUNITY", "NVIDIA A40:SECURE", "NVIDIA RTX A6000:SECURE",
@@ -114,6 +116,10 @@ def pod_body(a, gpu, cloud, name):
         "allowedCudaVersions": ["12.8", "12.9", "13.0", "13.1", "13.2"],
         "env": {"PIPELINE_HEARTBEAT_MIN": str(a.heartbeat_min), "PIPELINE_MAX_MIN": str(a.max_min)},
     }
+    if a.bootstrap:  # stock image, docker/bootstrap.sh from the repo does the Dockerfile steps at boot
+        body["imageName"] = BASE_IMAGE
+        body["dockerEntrypoint"] = ["bash", "-c", f"curl -fsSL https://raw.githubusercontent.com/{REPO}/{a.bootstrap}"
+                                    f"/docker/bootstrap.sh | bash -s {REPO} {a.bootstrap}"]
     if a.min_download_mbps:
         body["minDownloadMbps"] = a.min_download_mbps
     if a.network_volume:
@@ -211,6 +217,8 @@ def main():
     ap.add_argument("--gpu", action="append", help="'NAME:COMMUNITY|SECURE', repeatable, in priority order")
     ap.add_argument("--max-price", type=float, default=0.80, help="max $/h for the GPU (default 0.80)")
     ap.add_argument("--image", default=DEFAULT_IMAGE)
+    ap.add_argument("--bootstrap", metavar="GIT_REF", nargs="?", const="main",
+                    help="no custom image: stock runpod/comfyui + docker/bootstrap.sh at boot (+3-5 min)")
     ap.add_argument("--network-volume", help="Network Volume id with the models (Secure Cloud only)")
     ap.add_argument("--volume-gb", type=int, default=80, help="pod volume for models when no Network Volume")
     ap.add_argument("--min-ram", type=int, default=46, help="min RAM per GPU, GB (InfiniteTalk peaks ~43 GB)")

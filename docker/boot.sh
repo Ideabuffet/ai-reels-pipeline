@@ -16,9 +16,10 @@ cp -rn /opt/pipeline/models-skel/. "$MODELS_ROOT/" 2>/dev/null || true
 ln -sfn "$MODELS_ROOT" /models   # /opt/comfyui-baked/models -> /models (set in the Dockerfile)
 echo "$MODELS_ROOT" > /tmp/pipeline/models_root
 
-if [ "${PIPELINE_FETCH_MODELS:-1}" != 0 ]; then
+if [ "${PIPELINE_FETCH_MODELS:-1}" != 0 ] && [ ! -f /tmp/pipeline/fetch.state ]; then
   setsid nohup /opt/pipeline/fetch_models.sh > /tmp/pipeline/fetch.log 2>&1 < /dev/null &
 fi
+[ "${PIPELINE_PREPARE_ONLY:-0}" = 1 ] && exit 0   # bootstrap.sh: start the download early, boot later
 setsid nohup /opt/pipeline/watchdog.sh > /tmp/pipeline/watchdog.log 2>&1 < /dev/null &
 
 exec /start.sh "$@"
