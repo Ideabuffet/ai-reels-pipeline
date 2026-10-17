@@ -1,4 +1,4 @@
-# AI-persona reels on RunPod: ComfyUI + Kijai WanVideoWrapper (Wan 2.2 I2V, InfiniteTalk) + RTX VSR.
+# AI-persona reels on RunPod: ComfyUI + Kijai WanVideoWrapper (Wan 2.2 I2V, InfiniteTalk) + RIFE + RTX VSR.
 # Models are NOT baked in (62 GB): boot.sh downloads them with aria2 or finds them on a Network Volume.
 #
 #   docker build -t ghcr.io/<owner>/ai-reels-comfy:<tag> pipeline/docker
@@ -7,13 +7,14 @@ FROM ${BASE_IMAGE}
 
 ARG WANVIDEO_SHA=088128b22424
 ARG VHS_SHA=4d907bee61e9
+ARG FRAMEINTERP_SHA=26545cc2dd95
 ARG KJNODES_SHA=
 
 RUN apt-get update && apt-get install -y --no-install-recommends aria2 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY setup_nodes.sh patch_wav2vec.py /opt/pipeline/
-RUN WANVIDEO_SHA=$WANVIDEO_SHA VHS_SHA=$VHS_SHA KJNODES_SHA=$KJNODES_SHA \
+RUN WANVIDEO_SHA=$WANVIDEO_SHA VHS_SHA=$VHS_SHA FRAMEINTERP_SHA=$FRAMEINTERP_SHA KJNODES_SHA=$KJNODES_SHA \
     bash /opt/pipeline/setup_nodes.sh /opt/comfyui-baked
 
 # ComfyUI/models -> /models -> $MODELS_ROOT (chosen at boot); the stock subfolders become a skeleton.

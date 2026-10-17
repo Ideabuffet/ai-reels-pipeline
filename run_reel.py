@@ -158,7 +158,7 @@ def wait_boot(comfy, pod_id, timeout=25 * 60):
 
 def check_nodes(comfy):
     """Fail fast (before the long model download) if a custom node did not import."""
-    need = {n["class_type"] for g in (graphs.wan22("x", "x", "x"), graphs.talk("x", "x", "x", blocks_to_swap=20))
+    need = {n["class_type"] for g in (graphs.wan22("x", "x", "x", interp=2), graphs.talk("x", "x", "x", blocks_to_swap=20))
             for n in g.values()}
     for attempt in range(10):
         try:
@@ -343,8 +343,9 @@ def main():
 
             prefix = lambda c: f"{spec['name']}/{c['id']}"
             acts = [(c["id"], graphs.wan22(up_names[c["_frame"]], c["prompt"], prefix(c), W, H,
-                                           c.get("frames", gen.get("action_frames", 81)),
-                                           c.get("seed", gen.get("action_seed", 42)), upscale=up))
+                                           c.get("frames", gen.get("action_frames", 121)),
+                                           c.get("seed", gen.get("action_seed", 42)), upscale=up,
+                                           interp=gen.get("action_interp", 2), fps=gen.get("action_fps", 48)))
                     for c in todo if c["kind"] == "action"]
             talks = [(c["id"], graphs.talk(up_names[c["_frame"]], up_names[audio[c["audio"]]], prefix(c), W, H,
                                            c.get("prompt", graphs.TALK_PROMPT), c.get("seed", gen.get("talk_seed", 2)),

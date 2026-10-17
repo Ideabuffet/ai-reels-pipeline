@@ -9,6 +9,7 @@ N=$C/custom_nodes
 HERE=$(cd "$(dirname "$0")" && pwd)
 : "${WANVIDEO_SHA:=088128b22424}"   # kijai/ComfyUI-WanVideoWrapper, the commit used in the 17.10 test
 : "${VHS_SHA:=4d907bee61e9}"        # Kosinkadink/ComfyUI-VideoHelperSuite
+: "${FRAMEINTERP_SHA:=26545cc2dd95}"  # Fannovel16/ComfyUI-Frame-Interpolation (RIFE for Wan 2.2 clips)
 : "${KJNODES_SHA:=}"                # empty = keep the KJNodes baked into runpod/comfyui (RTX VSR worked with it)
 
 clone() {  # url dir sha
@@ -19,6 +20,12 @@ clone() {  # url dir sha
 }
 clone https://github.com/kijai/ComfyUI-WanVideoWrapper ComfyUI-WanVideoWrapper "$WANVIDEO_SHA"
 clone https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite ComfyUI-VideoHelperSuite "$VHS_SHA"
+clone https://github.com/Fannovel16/ComfyUI-Frame-Interpolation ComfyUI-Frame-Interpolation "$FRAMEINTERP_SHA"
+# rife49.pth (21 MB) is baked in, so the node does not fetch it from GitHub releases on the first clip
+R=$N/ComfyUI-Frame-Interpolation/ckpts/rife
+mkdir -p "$R"
+curl -fsSL -o "$R/rife49.pth" https://github.com/Fannovel16/ComfyUI-Frame-Interpolation/releases/download/models/rife49.pth
+echo "e55fd00f3cc184e3c65961f4bb827a9da022e78eed36b055242c0ac30000d533  $R/rife49.pth" | sha256sum -c -
 if [ -n "$KJNODES_SHA" ]; then
   clone https://github.com/kijai/ComfyUI-KJNodes ComfyUI-KJNodes "$KJNODES_SHA"
 else
@@ -40,6 +47,7 @@ cat /tmp/torch-constraints.txt
 python3.12 -m pip install --no-cache-dir -c /tmp/torch-constraints.txt \
   -r "$N/ComfyUI-WanVideoWrapper/requirements.txt" \
   -r "$N/ComfyUI-VideoHelperSuite/requirements.txt" \
+  -r "$N/ComfyUI-Frame-Interpolation/requirements-no-cupy.txt" \
   "sageattention==1.0.6" nvidia-vfx "huggingface_hub>=1.5.0,<2.0"
 
 python3.12 "$HERE/patch_wav2vec.py" "$N/ComfyUI-WanVideoWrapper/multitalk/wav2vec2.py"

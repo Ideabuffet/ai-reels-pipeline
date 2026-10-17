@@ -1,6 +1,7 @@
 """ComfyUI API graphs (Kijai WanVideoWrapper), taken from nina-hybrid/tools/comfy_job.py and vsr.py.
 
-  wan22(...) — silent action clip, Wan 2.2 I2V A14B GGUF Q8 + lightx2v 4-step LoRAs (2 + 2 steps)
+  wan22(...) — silent action clip, Wan 2.2 I2V A14B GGUF Q8 + lightx2v 4-step LoRAs (2 + 2 steps);
+               121 frames -> RIFE x2 -> saved at 48 fps = real-time speed (graph from nina-gorokh/tools/comfy_job.py)
   talk(...)  — talking head, InfiniteTalk I2V on Wan 2.1 GGUF Q8 + lightx2v, 4 steps
 Both end with an optional RTX VSR upscale (KJNodes ImageResizeKJv2 / nvidia_rtx_vsr) inside the same graph,
 so a clip comes out of the pod already at the final size.
@@ -32,11 +33,11 @@ def _common(image, W, H):
 def _finish(p, frames_src, prefix, fps, upscale, audio=None):
     images = frames_src
     if upscale:
-        p["up"] = {"class_type": "ImageResizeKJv2", "inputs": {
+        p["vsr"] = {"class_type": "ImageResizeKJv2", "inputs": {
             "image": frames_src, "width": upscale[0], "height": upscale[1], "upscale_method": "nvidia_rtx_vsr",
             "keep_proportion": "crop", "pad_color": "0, 0, 0", "crop_position": "center",
             "divisible_by": 16, "device": "gpu"}}
-        images = ["up", 0]
+        images = ["vsr", 0]
     p["out"] = {"class_type": "VHS_VideoCombine", "inputs": {
         "images": images, "frame_rate": float(fps), "loop_count": 0, "filename_prefix": prefix,
         "format": "video/h264-mp4", "pix_fmt": "yuv420p", "crf": 17, "save_metadata": False,
@@ -46,7 +47,10 @@ def _finish(p, frames_src, prefix, fps, upscale, audio=None):
     return p
 
 
-def wan22(image, prompt, prefix, W=480, H=832, frames=81, seed=42, style=STYLE, upscale=(720, 1280)):
+def wan22(image, prompt, prefix, W=480, H=832, frames=121, seed=42, style=STYLE, upscale=(720, 1280),
+          interp=2, fps=48):
+    """interp: RIFE multiplier (1 = off). Wan 2.2 at 16 fps plays slow-mo; 121 frames x2 at 48 fps = real time.
+    The old nina-hybrid clips were frames=81, interp=1, fps=16."""
     p = _common(image, W, H)
     lora = "WanVideo/Wan22/Wan_2_2_I2V_A14B_{}_lightx2v_4step_lora_260412_rank_64_fp16.safetensors"
     for tag, f in (("hi", "HighNoise"), ("lo", "LowNoise")):
@@ -78,7 +82,14 @@ def wan22(image, prompt, prefix, W=480, H=832, frames=81, seed=42, style=STYLE, 
     p["dec"] = {"class_type": "WanVideoDecode", "inputs": {
         "vae": ["vae", 0], "samples": ["s_lo", 0], "enable_vae_tiling": False,
         "tile_x": 272, "tile_y": 272, "tile_stride_x": 144, "tile_stride_y": 128, "normalization": "default"}}
-    return _finish(p, ["dec", 0], prefix, 16, upscale)
+    src = ["dec", 0]
+    if interp > 1:
+        p["rife"] = {"class_type": "RIFE VFI", "inputs": {
+            "ckpt_name": "rife49.pth", "frames": src, "clear_cache_after_n_frames": 10, "multiplier": interp,
+            "fast_mode": True, "ensemble": True, "scale_factor": 1.0, "dtype": "float32", "torch_compile": False,
+            "batch_size": 1}}
+        src = ["rife", 0]
+    return _finish(p, src, prefix, fps, upscale)
 
 
 def talk(image, audio, prefix, W=480, H=832, prompt=TALK_PROMPT, seed=2, blocks_to_swap=0, upscale=(720, 1280)):
