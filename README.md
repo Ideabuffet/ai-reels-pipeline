@@ -1,0 +1,119 @@
+# Конвейер «сценарий → вертикальный ролик» на своём GPU в RunPod
+
+Вариант C из теста 17.10.2026: клипы действий — **Wan 2.2 I2V A14B**, говорящие куски — **InfiniteTalk**, апскейл до 720×1280 — **RTX VSR**, монтаж — ffmpeg на Маке. Всё по одному JSON-описанию ролика.
+
+```bash
+python3 run_reel.py reels/nina_shchi.json
+```
+
+Одна команда делает всё:
+1. показывает цены и наличие карт и ждёт «да»;
+2. создаёт под из образа `ghcr.io/ideabuffet/ai-reels-comfy`;
+3. ждёт ComfyUI и модели;
+4. загружает кадры и аудио;
+5. ставит пачкой все клипы Wan 2.2, затем `/free` (выгрузка моделей без перезапуска ComfyUI), затем пачкой все куски InfiniteTalk; каждый клип сразу апскейлится RTX VSR внутри своего графа и скачивается, как только готов;
+6. **удаляет под**, даже при ошибке или Ctrl-C;
+7. собирает ролик и печатает время и цену по шагам.
+
+Нужно: `RUNPOD_API_KEY` в окружении, `ffmpeg`, `whisper-cli` с моделью `~/development/whisper-models/ggml-small.bin`, Python 3 с `requests` и `Pillow`. Для озвучки — `ELEVENLABS_API_KEY`.
+
+## Флаги
+
+| Флаг | Что делает |
+|---|---|
+| `--quote` | только цены и наличие карт |
+| `--yes` | не спрашивать перед созданием пода |
+| `--gpu "NVIDIA A40:SECURE"` | свой список карт по приоритету (можно несколько раз). По умолчанию: 3090 Community → 4090 Community → A6000 Community → A40 Secure → … |
+| `--max-price 0.6` | потолок $/ч |
+| `--tts` | озвучить `script` через ElevenLabs (голос — `voice.voice_id` в описании), к говорящим кускам добавляется 0,6 с тишины в начале |
+| `--music file.mp3` | музыкальная подложка (−24 дБ) |
+| `--network-volume ID` | брать модели с Network Volume (только Secure Cloud) |
+| `--bootstrap [ref]` | без своего образа: стоковый `runpod/comfyui` + `docker/bootstrap.sh` выполняет шаги Dockerfile при старте (+3–5 мин) |
+| `--resume --out-dir runs/…` | догенерировать только недостающие клипы |
+| `--keep-pod` | остановить, а не удалить (диск пода продолжает стоить $0,20/ГБ·мес — не рекомендуется) |
+| `cleanup` | показать и удалить оставшиеся поды `reel-*` |
+
+## Как гарантируется остановка пода
+
+- **Оркестратор:** вся работа с подом в `try/finally`; SIGTERM/SIGHUP превращаются в исключение; на время удаления Ctrl-C игнорируется; удаление повторяется до 5 раз.
+- **Сам под (`watchdog.sh`):** оркестратор каждые 10–15 с опрашивает `/pipeline/status` — это пульс. Если пульса нет 20 мин (Мак уснул, упал, пропала сеть) или под живёт дольше 240 мин, под сам себя останавливает (pod-scoped `RUNPOD_API_KEY`, который RunPod кладёт в каждый под). Настраивается `--heartbeat-min` / `--max-min`.
+
+## Образ (`docker/`)
+
+| Файл | Что делает |
+|---|---|
+| `Dockerfile` | `FROM runpod/comfyui:1.3.3-comfyuiv0.30.0-cuda12.8`, ставит aria2 и запускает `setup_nodes.sh` |
+| `setup_nodes.sh` | ставит зафиксированные ноды: WanVideoWrapper `088128b22424` и VideoHelperSuite `4d907bee61e9`; KJNodes берётся из базового образа. Ставит их зависимости, `sageattention==1.0.6`, `nvidia-vfx`, `huggingface_hub>=1.5,<2.0`. Torch закреплён констрейнтом, чтобы зависимости нод его не подменили |
+| `patch_wav2vec.py` | фикс wav2vec для transformers 5 (идемпотентный, падает, если код ноды изменился) |
+| `boot.sh` | entrypoint: выбирает, где лежат модели, запускает скачивание и watchdog, потом стоковый `/start.sh` |
+| `fetch_models.sh` + `models.txt` | aria2 по списку из 11 файлов (62,0 ГБ) с проверкой размеров; уже скачанные файлы пропускает |
+| `pipeline_status/` | маршрут ComfyUI `GET /pipeline/status`: прогресс моделей, аптайм, пульс для watchdog |
+| `bootstrap.sh` | те же шаги для стокового образа (режим `--bootstrap`) |
+
+Образ собирает GitHub Actions (`.github/workflows/build-image.yml`) при каждом изменении `docker/`. Теги: `:latest` и `:<sha коммита>`.
+
+Модели в образ **не зашиты**: `ComfyUI/models` → `/models` → `/workspace/models` (диск пода) или `/runpod-volume/models` (Network Volume).
+
+Управление идёт только через HTTP-прокси RunPod (`https://<pod>-8188.proxy.runpod.net`). SSH не нужен, но открыт для отладки.
+
+## Модели: aria2 при старте или Network Volume — расчёт
+
+Исходные данные:
+- 62 ГБ моделей;
+- скорость скачивания [замер 17.10]: ~61 МБ/с на Secure A40 (≈ 17 мин), ~20 МБ/с на Community 3090 (≈ 52 мин);
+- Network Volume: $0,07/ГБ·мес, **только Secure Cloud**, под привязан к дата-центру тома;
+- генерация ролика Нины: ~37 мин GPU [замер].
+
+| | aria2, Community 3090 ($0,22/ч) | aria2, Secure A40 ($0,59/ч) | Network Volume 65 ГБ, Secure A40 |
+|---|---:|---:|---:|
+| Постоянно | $0 | $0 | **$4,55/мес** |
+| Скачивание моделей на каждый под | ~$0,19, ~52 мин | ~$0,17, ~17 мин | ~$0, секунды |
+| Генерация одного ролика | $0,135 | $0,36 | $0,36 |
+| **30 роликов/мес, по одному на под** | **≈ $9,8** | ≈ $15,9 | ≈ $15,4 |
+| **30 роликов/мес, пачками по 5** | **≈ $5,2** | ≈ $11,8 | ≈ $15,4 |
+
+**Выбор: по умолчанию aria2 при старте.**
+- Дешевле при любом объёме, потому что работает на Community-картах: 3090 за $0,22/ч против минимум $0,59/ч в Secure. Network Volume на Community не подключается.
+- Нет постоянной платы и привязки к одному дата-центру. Это важно, потому что карты часто распроданы.
+- Сценарий «много роликов на один под» (батч) делает скачивание почти бесплатным в пересчёте на ролик.
+
+**Network Volume (`--network-volume`) имеет смысл**, когда и так работаешь в Secure Cloud и запускаешь под больше ~27 раз в месяц ($4,55 / $0,17). Или когда важна задержка старта: −17…50 мин на каждый под.
+
+**Никогда не держать модели на остановленном поде.** Диск остановленного пода стоит $0,20/ГБ·мес: 80 ГБ = $16/мес, в 3,5 раза дороже Network Volume.
+
+## Формат описания ролика (`reels/*.json`)
+
+```jsonc
+{
+  "name": "nina_shchi",
+  "assets": "../../nina-hybrid/assets/nina2",      // относительно файла описания
+  "gen": {"width": 480, "height": 832, "action_frames": 81, "upscale": [720, 1280], "action_seed": 42, "talk_seed": 2},
+  "voice": {"voice_id": "KxsqSfqn4XzqvkFEn8eh", "model": "eleven_multilingual_v2", "pad_s": 0.6},  // Mabel
+  "script_file": "audio/texts.json",               // или "script": {"1_hook": "текст", ...} — по порядку речи
+  "audio": {"1_hook": "audio/pad_1_hook.mp3", ...}, // готовое аудио; с --tts генерируется из script
+  "clips": [
+    {"id": "F03_cabbage", "kind": "action", "frame": "frames/F03_cabbage.png", "prompt": "She stirs ..."},
+    {"id": "T1_hook", "kind": "talk", "frame": "frames/F01_hook.png", "audio": "1_hook", "prompt": "..."}
+  ],
+  "layout": [                                       // раскладка монтажа
+    {"type": "talk", "clip": "T1_hook", "trim_start": 0.6},
+    {"type": "broll", "clips": ["F02_mushrooms", "..."], "audio": "2_recipe"},
+    {"type": "split", "top": ["F08_steam", "F09_spoon"], "bottom": "T2_why", "bottom_crop_y": 180},
+    {"type": "talk", "clip": "T3_cta", "trim_start": 0.6}
+  ],
+  "subtitles": {"lang": "ru", "max_chars": 16, "size": 92, "y": 1300, "split_y": 900},
+  "overlays": [{"text": "БЕЗ МЯСА?", "start": 0, "end": 3.2, "y": 260, "size": 130}],
+  "music": null
+}
+```
+
+Субтитры берут текст из `script`, а время слов — из whisper. Монтаж (`montage.py`) — это обобщённый `build_nina2.py`. На готовых клипах теста он даёт побитово тот же ролик (PSNR = ∞).
+
+## Файлы оркестратора
+
+- `run_reel.py` — точка входа, шаги, таблица времени и цены, `report.json` в папке прогона.
+- `runpod_api.py` — REST v1 (поды, тома) и GraphQL (цены, наличие, баланс).
+- `comfy_remote.py` — ComfyUI через прокси: загрузка входов, очередь, ожидание, скачивание.
+- `graphs.py` — графы Wan 2.2 и InfiniteTalk из `comfy_job.py`, плюс RTX VSR. На 24-ГБ картах InfiniteTalk автоматически включает block swap 20.
+- `tts.py` — ElevenLabs.
+- `montage.py` — монтаж по `layout`, можно запускать отдельно: `montage.py reel.json clips_dir out.mp4`.

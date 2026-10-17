@@ -156,6 +156,24 @@ def wait_boot(comfy, pod_id, timeout=25 * 60):
     raise TimeoutError("ComfyUI did not come up in 25 min (image pull / start failed?)")
 
 
+def check_nodes(comfy):
+    """Fail fast (before the long model download) if a custom node did not import."""
+    need = {n["class_type"] for g in (graphs.wan22("x", "x", "x"), graphs.talk("x", "x", "x", blocks_to_swap=20))
+            for n in g.values()}
+    for attempt in range(10):
+        try:
+            have = set(comfy.get("/object_info", timeout=120).json())
+            break
+        except Exception:  # noqa: BLE001 — ComfyUI may still be loading nodes
+            time.sleep(10)
+    else:
+        raise RuntimeError("/object_info unavailable")
+    missing = sorted(need - have)
+    if missing:
+        raise RuntimeError(f"ComfyUI is missing nodes: {', '.join(missing)} (custom node import failed?)")
+    log(f"  ноды на месте ({len(need)} типов)")
+
+
 def wait_models(comfy, timeout=120 * 60):
     t0, last, last_b = time.time(), 0, None
     while time.time() - t0 < timeout:
@@ -286,7 +304,7 @@ def main():
 
         try:
             bal0 = rp.balance()
-            with steps.step("создание пода"):
+            with steps.step("создание пода", billed=False):
                 pod, q = create_pod(a, cands, f"{POD_PREFIX}{spec['name']}")
                 pod_id, pod_t0 = pod["id"], time.time()
                 json.dump({"pod_id": pod_id}, open(os.path.join(run_dir, "pod.json"), "w"))
@@ -298,6 +316,7 @@ def main():
             comfy = comfy_remote.Comfy(f"https://{pod_id}-8188.proxy.runpod.net")
             with steps.step("загрузка образа и старт ComfyUI"):
                 wait_boot(comfy, pod_id)
+                check_nodes(comfy)
             with steps.step("модели (aria2 / Network Volume)"):
                 st = wait_models(comfy)
                 log(f"  модели готовы: {st['bytes_total'] / 1e9:.1f} GB в {st['models_root']}")
